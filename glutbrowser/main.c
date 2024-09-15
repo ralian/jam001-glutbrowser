@@ -12,6 +12,90 @@
 #include <string.h>
 #include <ctype.h>
 #include <GL/freeglut.h>
+#include <curl/curl.h>
+
+char filebuffer[PAGE_SIZE * 16];
+static char errorBuffer[CURL_ERROR_SIZE];
+char* filebuffer_head = &filebuffer;
+int filebuffer_dirty = 0;
+
+int writer(char* data, size_t size, size_t nmemb, char* buf)
+{
+	if (!data) return 0;
+	int bytes = size * nmemb;
+	//filebuffer_head[bytes] = '\0';
+	memcpy(filebuffer_head, data, bytes);
+	filebuffer_dirty++;
+	filebuffer_head += bytes;
+	return bytes;
+}
+
+static int curl_init(CURL** conn, const char* url)
+{
+	CURLcode code;
+
+	*conn = curl_easy_init();
+
+	if (*conn == NULL) {
+		fprintf(stderr, "Failed to create CURL connection\n");
+		exit(EXIT_FAILURE);
+	}
+
+	code = curl_easy_setopt(*conn, CURLOPT_ERRORBUFFER, errorBuffer);
+	if (code != CURLE_OK) {
+		fprintf(stderr, "Failed to set error buffer [%d]\n", code);
+		return 1;
+	}
+
+	code = curl_easy_setopt(*conn, CURLOPT_URL, url);
+	if (code != CURLE_OK) {
+		fprintf(stderr, "Failed to set URL [%s]\n", errorBuffer);
+		return 1;
+	}
+
+	code = curl_easy_setopt(*conn, CURLOPT_FOLLOWLOCATION, 1L);
+	if (code != CURLE_OK) {
+		fprintf(stderr, "Failed to set redirect option [%s]\n", errorBuffer);
+		return 1;
+	}
+
+	code = curl_easy_setopt(*conn, CURLOPT_WRITEFUNCTION, writer);
+	if (code != CURLE_OK) {
+		fprintf(stderr, "Failed to set writer [%s]\n", errorBuffer);
+		return 1;
+	}
+
+	code = curl_easy_setopt(*conn, CURLOPT_WRITEDATA, filebuffer);
+	if (code != CURLE_OK) {
+		fprintf(stderr, "Failed to set write data [%s]\n", errorBuffer);
+		return 1;
+	}
+
+	return 0;
+}
+
+int load_uri(const char* uri)
+{
+	CURL* conn = NULL;
+	CURLcode code;
+
+	// Initialize CURL connection
+	if (0 != curl_init(&conn, uri)) {
+		fprintf(stderr, "Connection initialization failed\n");
+		return 1;
+	}
+
+	// Retrieve content for the URL
+	code = curl_easy_perform(conn);
+	curl_easy_cleanup(conn);
+
+	if (code != CURLE_OK) {
+		fprintf(stderr, "Failed to get '%s' [%s]\n", uri, errorBuffer);
+		return 1;
+	}
+
+	return 0;
+}
 
 unsigned int modstate;
 int cur_key = -1;
@@ -36,13 +120,6 @@ int draw_text(int x, int y, int* dxout, int* dyout, const style* s, const char* 
 	glRasterPos2i(x, y);
 	if (s->border->top > 0) draw_line(s->border->top, x, y, x + 100, y, s->color);
 	while (*str) {
-		/*if (*str == '\n') {
-			*dyout += glutBitmapHeight(s->font);
-			y -= glutBitmapHeight(s->font);
-			glRasterPos2i(x, y);
-			str++; lines++;
-			continue;
-		}*/
 		*dxout += glutBitmapWidth(s->font, *str); // TODO this is broken for multilines.
 		glutBitmapCharacter(s->font, *str++);
 	}
@@ -101,6 +178,7 @@ void mouseinput(int button, int state, int x, int y)
 			printf("Clicked in the BB (%i, %i, %i, %i)\n", iter->x0, iter->y0, iter->x1, iter->y1);
 			if (0 == strcmpi(iter->type, "a") && get_attribute_by_name(iter, "href")) {
 				printf("Navigating to %s\n", get_attribute_by_name(iter, "href"));
+				load_uri(get_attribute_by_name(iter, "href"));
 			}
 		}
 		iter = next_tag(iter);
@@ -109,6 +187,14 @@ void mouseinput(int button, int state, int x, int y)
 
 void display(void)
 {
+	if (filebuffer_dirty > 0) {
+		arena_head = arena_start;
+		root_tag.first_child = NULL;
+		parse_html(filebuffer);
+		filebuffer_dirty = 0;
+		filebuffer_head = &filebuffer;
+	}
+	
 	char str[256];
 
 	glClearColor(((float)bg_color->r) / 255.f, ((float)bg_color->g) / 255.f, ((float)bg_color->b) / 255.f, 0.f);
@@ -197,8 +283,6 @@ void display(void)
 	glutSwapBuffers();
 }
 
-char filebuffer[PAGE_SIZE * 16];
-
 int main(int argc, char** argv)
 {
 	glutInit(&argc, argv);
@@ -213,6 +297,8 @@ int main(int argc, char** argv)
 	glutSpecialFunc(skeypress);
 	glutSpecialUpFunc(skeyrelease);
 	glutMouseFunc(mouseinput);
+
+	curl_global_init(CURL_GLOBAL_DEFAULT);
 
 	FILE* fin;
 	if (argv[1]) {

@@ -6,4 +6,8 @@ find_package(freeglut REQUIRED PATHS freeglut/FreeGLUT)
 
 add_executable(glutbrowser main.c)
 target_include_directories(glutbrowser PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/freeglut/include")
-target_link_libraries(glutbrowser FreeGLUT::freeglut_static)
+target_include_directories(glutbrowser PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/curl/include")
+target_link_libraries(glutbrowser
+	FreeGLUT::freeglut_static
+	"${CMAKE_CURRENT_SOURCE_DIR}/curl/lib/Debug/libcurl-d_imp.lib" # Hack for now
+)
